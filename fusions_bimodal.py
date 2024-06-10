@@ -359,8 +359,8 @@ class ModalityGatedFusion(nn.Module):
     def __init__(self):
         super(ModalityGatedFusion, self).__init__()
         self.W = nn.Parameter(torch.ones(2), requires_grad=True)
-        self.cross_attention_module = CrossAttention()
-        self.self_attention_module = SelfAttention()
+        self.cross_attention = CrossAttention()
+        self.self_attention = SelfAttention()
 
     def forward(self, x, y):
         W_prime = F.softmax(self.W, dim=0)
@@ -369,9 +369,9 @@ class ModalityGatedFusion(nn.Module):
 
         if torch.argmax(W_prime) == 0:
             x_prime = W_x * x
-            y_prime = W_y * self.cross_attention_module(x, y)
+            y_prime = W_y * self.cross_attention(x, y)
         else:
-            x_prime = W_x * self.cross_attention_module(y, x)
+            x_prime = W_x * self.cross_attention(y, x)
             y_prime = W_y * y
         
         H = self.self_attention_module(torch.cat((x_prime, y_prime), dim=-1))
