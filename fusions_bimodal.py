@@ -358,21 +358,21 @@ class SelfAttention(nn.Module):
 class ModalityGatedFusion(nn.Module):
     def __init__(self):
         super(ModalityGatedFusion, self).__init__()
-        self.W = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True))
+        self.W = nn.Parameter(torch.ones(2), requires_grad=True)
         self.cross_attention_module = CrossAttention()
         self.self_attention_module = SelfAttention()
 
-    def forward(self, A, T):
+    def forward(self, x, y):
         W_prime = F.softmax(self.W, dim=0)
-        W_A = W_prime[0]
-        W_T = W_prime[1]
+        W_x = W_prime[0]
+        W_y = W_prime[1]
 
         if torch.argmax(W_prime) == 0:
-            A_prime = W_A * A
-            T_prime = W_T * self.cross_attention_module(A, T)
+            x_prime = W_x * x
+            y_prime = W_y * self.cross_attention_module(x, y)
         else:
-            A_prime = W_A * self.cross_attention_module(T, A)
-            T_prime = W_T * T
+            x_prime = W_x * self.cross_attention_module(y, x)
+            y_prime = W_y * y
         
-        H = self.self_attention_module(torch.cat((A_prime, T_prime), dim=-1))
+        H = self.self_attention_module(torch.cat((x_prime, y_prime), dim=-1))
         return H
