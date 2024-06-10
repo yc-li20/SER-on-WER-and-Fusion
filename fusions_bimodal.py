@@ -358,7 +358,7 @@ class SelfAttention(nn.Module):
 class ModalityGatedFusion(nn.Module):
     def __init__(self):
         super(ModalityGatedFusion, self).__init__()
-        self.W = nn.Parameter(torch.tensor([1.0, 1.0]))
+        self.W = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True))
         self.cross_attention_module = CrossAttention()
         self.self_attention_module = SelfAttention()
 
