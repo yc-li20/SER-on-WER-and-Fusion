@@ -3,29 +3,16 @@ from torch import nn
 from torch.nn import functional as F
 from torch.autograd import Variable, Function
 
-
-"""
-:param x: The first input tensor, e.g., audio
-:param y: The second input tensor, e.g., text
-"""
-
-
 """
 Early fusion
 """
 class ConcatEarly(nn.Module):
-    """Concatenation of input data on dimension 2."""
+    """Concatenation of input data on dimension -1."""
 
     def __init__(self):
         super(ConcatEarly, self).__init__()
 
     def forward(self, x, y):
-        """
-        Forward Pass of ConcatEarly.
-        
-        :param x: First input tensor
-        :param y: Second input tensor
-        """
         return torch.cat([x, y], dim=-1)
 
 
@@ -33,17 +20,37 @@ class ConcatEarly(nn.Module):
 Cross-attention
 """
 class CrossAttention(nn.Module):
-    """Stacks modalities together on dimension 1."""
+    """Cross Attention module with additional feed-forward network and residual connections."""
 
-    def __init__(self):
-        super().__init__()        
-        self.attn = nn.MultiheadAttention(768, 16, batch_first=True)
-
+    def __init__(self, embed_dim=768, num_heads=8, ff_dim=1024, dropout=0.1):
+        super(CrossAttention, self).__init__()
+        
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim*2, ff_dim),
+            nn.ReLU(),
+            nn.Linear(ff_dim, embed_dim*2),
+        )
+        
+        self.norm1_x = nn.LayerNorm(embed_dim)
+        self.norm1_y = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim*2)
+        
+        self.dropout = nn.Dropout(dropout)
+        
     def forward(self, x, y):
-        x_y, _ = self.attn(x,y,y)
-        y_x, _ = self.attn(y,x,x)
-
-        fused = torch.cat([x_y, y_x], dim=-1)
+        x1, _ = self.attn(x, y, y)
+        y1, _ = self.attn(y, x, x)
+        
+        x1 = self.norm1_x(x + x1)
+        y1 = self.norm1_y(y + y1)
+        
+        fused = torch.cat([x1, y1], dim=-1)
+        fused = self.ffn(fused)
+        
+        fused = self.dropout(self.norm2(fused + torch.cat([x1, y1], dim=-1)))
+        
         return fused
 
 
@@ -77,28 +84,10 @@ See section F4 of https://arxiv.org/pdf/1905.12681.pdf for details
 class NLgate(torch.nn.Module):
 
     def __init__(self, thw_dim=1, c_dim=768, tf_dim=1, q_linear=None, k_linear=None, v_linear=None):
-        """
-        q_linear, k_linear, v_linear are none if no linear layer applied before q,k,v.
-        
-        Otherwise, a tuple of (indim,outdim) is required for each of these 3 arguments.
-        
-        :param thw_dim: See paper
-        :param c_dim: See paper
-        :param tf_dim: See paper
-        :param q_linear: See paper
-        :param k_linear: See paper
-        :param v_linear: See paper
-        """
         super(NLgate, self).__init__()
         self.qli = None
-#         if q_linear is not None:
-#             self.qli = nn.Linear(q_linear[0], q_linear[1])
         self.kli = None
-#         if k_linear is not None:
-#             self.kli = nn.Linear(k_linear[0], k_linear[1])
         self.vli = None
-#         if v_linear is not None:
-#             self.vli = nn.Linear(v_linear[0], v_linear[1])
         self.thw_dim = thw_dim
         self.c_dim = c_dim
         self.tf_dim = tf_dim
@@ -107,9 +96,6 @@ class NLgate(torch.nn.Module):
     def forward(self, x, y):
         """
         Apply Low-Rank TensorFusion to input.
-        
-        :param x: First input tensor
-        :param y: Second input tensor
         """
         q = x
         k = y
@@ -224,12 +210,10 @@ class MISA(nn.Module):
     def __init__(self):
         super(MISA, self).__init__()
 
-        # params: analyze args
         audio_dim   = 768
         text_dim    = 768
         hidden_dim  = 768
         
-        # params: intermedia
         output_dim = hidden_dim
         
         # shared encoder
@@ -296,17 +280,13 @@ class MISA(nn.Module):
         return loss
     
     def forward(self, text, audio):
-        '''
-            audio_feat: tensor of shape (batch, seqlen1, audio_in)
-            text_feat:  tensor of shape (batch, seqlen2, text_in)
-        '''
         utterance_audio = audio.squeeze(1) # [batch, hidden]
         utterance_text  = text.squeeze(1)   # [batch, hidden]
 
         # shared-private encoders
         self.shared_private(utterance_text, utterance_audio)
 
-        # For reconstruction
+        # reconstruction
         self.reconstruct()
         
         # 1-LAYER TRANSFORMER FUSION
@@ -319,48 +299,31 @@ class MISA(nn.Module):
 
 
 """
-Late fusion
-
-There is no model for late fusion as it is performed at the decision level.
-You should build two baseline models for text and audio respectively.
-And then use the following code to select the prediction.
-Our strategy is that if the predictions from text and audio are the same, then the prediction is selected.
-Otherwise, the one with higher probability is selected.
-
-Note that the following code should be removed from this .py file and attached in your own training model.
-"""
-
-if np.argmax(predictions_test_t[i]) == np.argmax(predictions_test_a[i]):
-    predictions_test.append([np.argmax(predictions_test_t[i])])
-else:
-    if max(predictions_test_t[i]) > max(predictions_test_a[i]):
-        predictions_test.append([np.argmax(predictions_test_t[i])])
-    else:
-        predictions_test.append([np.argmax(predictions_test_a[i])])
-
-
-
-
-"""
 Modality-gated fusion
-Adapted based on "Cross-Attention is Not Enough": https://arxiv.org/abs/2305.13583
+Adapted from "Cross-Attention is Not Enough": https://arxiv.org/abs/2305.13583
 """
 
 class SelfAttention(nn.Module):
-    def __init__(self):
+    def __init__(self, embed_dim=2304, num_heads=16, dropout=0.1):
         super(SelfAttention, self).__init__()
-        self.attn = nn.MultiheadAttention(768, 16, batch_first=True)
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, h):
         self_attn, _ = self.attn(h, h, h)
-        return self_attn
+        self_attn = self.dropout(self_attn)
+        h = self.norm(h + self_attn)  # Residual connection and layer normalization
+        return h
 
 class ModalityGatedFusion(nn.Module):
-    def __init__(self):
+    def __init__(self, embed_dim=768, num_heads=8, dropout=0.1):
         super(ModalityGatedFusion, self).__init__()
         self.W = nn.Parameter(torch.ones(2), requires_grad=True)
-        self.cross_attention = CrossAttention()
-        self.self_attention = SelfAttention()
+        self.cross_attention = CrossAttention(embed_dim, num_heads, dropout)
+        self.self_attention = SelfAttention(embed_dim * 2, num_heads, dropout)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(embed_dim * 2)
 
     def forward(self, x, y):
         W_prime = F.softmax(self.W, dim=0)
@@ -373,6 +336,31 @@ class ModalityGatedFusion(nn.Module):
         else:
             x_prime = W_x * self.cross_attention(y, x)
             y_prime = W_y * y
-        
-        H = self.self_attention_module(torch.cat((x_prime, y_prime), dim=-1))
+
+        H = torch.cat((x_prime, y_prime), dim=-1)
+        H = self.self_attention(H)
+        H = self.dropout(H)
+        H = self.norm(H)
+
         return H
+
+
+"""
+Late fusion
+
+There is no model for late fusion as it is performed at the decision level.
+You should build two baseline models for text and audio respectively.
+And then use the following code to select the prediction.
+Our strategy is that if the predictions from text and audio are the same, then the prediction is selected.
+Otherwise, the one with higher probability is selected.
+
+Note that the following code should be removed from this .py file and attached in your training model.
+"""
+
+if np.argmax(predictions_test_t[i]) == np.argmax(predictions_test_a[i]):
+    predictions_test.append([np.argmax(predictions_test_t[i])])
+else:
+    if max(predictions_test_t[i]) > max(predictions_test_a[i]):
+        predictions_test.append([np.argmax(predictions_test_t[i])])
+    else:
+        predictions_test.append([np.argmax(predictions_test_a[i])])
