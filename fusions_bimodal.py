@@ -250,9 +250,7 @@ class MISA(nn.Module):
         self.utt_t_recon = self.recon_t(self.utt_t)
         self.utt_a_recon = self.recon_a(self.utt_a)
 
-    ##########################################################
-    ## inter loss calculation
-    ##########################################################
+    # inter loss calculation
     def get_recon_loss(self):
         loss =  MSE()(self.utt_t_recon, self.utterance_t)
         loss += MSE()(self.utt_a_recon, self.utterance_a)
