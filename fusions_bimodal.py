@@ -311,7 +311,7 @@ class SelfAttention(nn.Module):
     def forward(self, h):
         self_attn, _ = self.attn(h, h, h)
         self_attn = self.dropout(self_attn)
-        h = self.norm(h + self_attn)  # Residual connection and layer normalization
+        h = self.norm(h + self_attn)
         return h
 
 class ModalityGatedFusion(nn.Module):
