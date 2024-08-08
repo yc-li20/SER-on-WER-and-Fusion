@@ -302,43 +302,39 @@ Adapted from "Cross-Attention is Not Enough": https://arxiv.org/abs/2305.13583
 """
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim=2304, num_heads=16, dropout=0.1):
+    def __init__(self):
         super(SelfAttention, self).__init__()
-        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(2304, 16, batch_first=True)
 
     def forward(self, h):
         self_attn, _ = self.attn(h, h, h)
-        self_attn = self.dropout(self_attn)
-        h = self.norm(h + self_attn)
-        return h
-
+        return self_attn
+    
 class ModalityGatedFusion(nn.Module):
-    def __init__(self, embed_dim=768, num_heads=8, dropout=0.1):
+    def __init__(self):
         super(ModalityGatedFusion, self).__init__()
         self.W = nn.Parameter(torch.ones(2), requires_grad=True)
-        self.cross_attention = CrossAttention(embed_dim, num_heads, dropout)
-        self.self_attention = SelfAttention(embed_dim * 2, num_heads, dropout)
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(embed_dim * 2)
+        self.W2 = nn.Parameter(torch.ones(3), requires_grad=True)
+        self.cross_attention = CrossAttention()
+        self.self_attention = SelfAttention()
 
     def forward(self, x, y):
         W_prime = F.softmax(self.W, dim=0)
+        W2_prime = F.softmax(self.W2, dim=0)
         W_x = W_prime[0]
         W_y = W_prime[1]
-
+        W2_1 = W2_prime[0]
+        W2_2 = W2_prime[1]
+        W2_3 = W2_prime[2]
+        
         if torch.argmax(W_prime) == 0:
             x_prime = W_x * x
             y_prime = W_y * self.cross_attention(x, y)
         else:
             x_prime = W_x * self.cross_attention(y, x)
             y_prime = W_y * y
-
-        H = torch.cat((x_prime, y_prime), dim=-1)
-        H = self.self_attention(H)
-        H = self.dropout(H)
-        H = self.norm(H)
+                    
+        H = torch.cat([W2_1 * x, W2_2 * y, W2_3 * self.self_attention(torch.cat((x_prime, y_prime), dim=-1))], dim = -1)
 
         return H
 
